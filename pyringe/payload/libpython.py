@@ -256,8 +256,7 @@ class PyObjectPtr(object):
                     return '0x0'
                 return '<%s at remote 0x%x>' % (self.tp_name, self.address)
 
-        return FakeRepr(self.safe_tp_name(),
-                        long(self._gdbval))
+        return FakeRepr(self.safe_tp_name(),long(self._gdbval))
 
     def write_repr(self, out, visited):
         '''
@@ -406,21 +405,15 @@ class InstanceProxy(object):
         if isinstance(self.attrdict, dict):
             kwargs = ', '.join(["%s=%r" % (arg, val)
                                 for arg, val in self.attrdict.iteritems()])
-            return '<%s(%s) at remote 0x%x>' % (self.cl_name,
-                                                kwargs, self.address)
+            return '<%s(%s) at remote 0x%x>' % (self.cl_name,kwargs, self.address)
         else:
-            return '<%s at remote 0x%x>' % (self.cl_name,
-                                            self.address)
+            return '<%s at remote 0x%x>' % (self.cl_name,self.address)
 
 def _PyObject_VAR_SIZE(typeobj, nitems):
     if _PyObject_VAR_SIZE._type_size_t is None:
         _PyObject_VAR_SIZE._type_size_t = gdb.lookup_type('size_t')
 
-    return ( ( typeobj.field('tp_basicsize') +
-               nitems * typeobj.field('tp_itemsize') +
-               (SIZEOF_VOID_P - 1)
-             ) & ~(SIZEOF_VOID_P - 1)
-           ).cast(_PyObject_VAR_SIZE._type_size_t)
+    return ( ( typeobj.field('tp_basicsize') + nitems * typeobj.field('tp_itemsize') + (SIZEOF_VOID_P - 1)) & ~(SIZEOF_VOID_P - 1)).cast(_PyObject_VAR_SIZE._type_size_t)
 _PyObject_VAR_SIZE._type_size_t = None
 
 class HeapTypeObjectPtr(PyObjectPtr):
