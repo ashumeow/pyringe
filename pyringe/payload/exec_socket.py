@@ -26,8 +26,7 @@ def StartExecServer():
   sockdir = '/tmp/pyringe_%s' % os.getpid()
   if not os.path.isdir(sockdir):
     os.mkdir(sockdir)
-  socket_path = ('%s/%s.execsock' %
-                 (sockdir, threading.current_thread().ident))
+  socket_path = ('%s/%s.execsock' % (sockdir, threading.current_thread().ident))
 
   if os.path.exists(socket_path):
     os.remove(socket_path)
