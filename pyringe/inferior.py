@@ -27,6 +27,7 @@ import functools
 import json
 import logging
 import os
+import re
 import select
 import signal
 import subprocess
@@ -44,7 +45,7 @@ _GDB_STARTUP_FILES = [
     'importsetup.py',
     'gdb_service.py',
 ]
-_GDB_ARGS = ['gdb', '--nh', '--nw', '--quiet', '--batch-silent']
+_GDB_ARGS = ['gdb', '--nw', '--quiet', '--batch-silent']
 
 
 def _SymbolFilePath():
@@ -126,16 +127,33 @@ class GdbProxy(object):
   implemented on top of this if it is to be available.
   """
 
-  def __init__(self, args=None, arch='i386:x86-64'):
-    super(GdbProxy, self).__init__()
+  firstrun = True
 
+  def __init__(self, args=None, arch=None):
+    super(GdbProxy, self).__init__()
+    gdb_version = GdbProxy.Version()
+    if gdb_version < (7, 4, None) and GdbProxy.firstrun:
+      # The user may have a custom-built version, so we only warn them
+      logging.warning('Your version of gdb may be unsupported (< 7.4), '
+                      'proceed with caution.')
+      GdbProxy.firstrun = False
+
+    arglist = _GDB_ARGS
     # Due to a design flaw in the C part of the gdb python API, setting the
     # target architecture from within a running script doesn't work, so we have
     # to do this with a command line flag.
-    arglist = (_GDB_ARGS +
-               ['--eval-command', 'set architecture ' + arch] +
+    if arch:
+        arglist = arglist + ['--eval-command', 'set architecture ' + arch]
+    arglist = (arglist +
                ['--command=' + os.path.join(PAYLOAD_DIR, fname)
                 for fname in _GDB_STARTUP_FILES])
+
+    # Add version-specific args
+    if gdb_version >= (7, 6, 1):
+      # We want as little interference from user settings as possible,
+      # but --nh was only introduced in 7.6.1
+      arglist.append('--nh')
+
     if args:
       arglist.extend(args)
 
@@ -151,6 +169,7 @@ class GdbProxy(object):
     self._outfile_r = open(outfile_w.name)
     self._errfile_r = open(errfile_w.name)
 
+    logging.debug('Starting new gdb process...')
     self._process = subprocess.Popen(
         bufsize=0,
         args=arglist,
@@ -189,7 +208,7 @@ class GdbProxy(object):
         # acknowledged, let's give it some time to die in peace
         time.sleep(0.1)
     except (TimeoutError, ProxyError):
-      logging.info('Termination request not acknowledged, killing gdb.')
+      logging.debug('Termination request not acknowledged, killing gdb.')
     if self.is_running:
       # death pill didn't seem to work. We don't want the inferior to get killed
       # the next time it hits a dangling breakpoint, so we send a SIGINT to gdb,
@@ -205,6 +224,52 @@ class GdbProxy(object):
   @property
   def is_running(self):
     return self._process.poll() is None
+
+  @staticmethod
+  def Version():
+    """Gets the version of gdb as a 3-tuple.
+
+    The gdb devs seem to think it's a good idea to make --version
+    output multiple lines of welcome text instead of just the actual version,
+    so we ignore everything it outputs after the first line.
+    Returns:
+      The installed version of gdb in the form
+      (<major>, <minor or None>, <micro or None>)
+      gdb 7.7 would hence show up as version (7,7)
+    """
+    output = subprocess.check_output(['gdb', '--version']).split('\n')[0]
+    # Example output (Arch linux):
+    # GNU gdb (GDB) 7.7
+    # Example output (Debian sid):
+    # GNU gdb (GDB) 7.6.2 (Debian 7.6.2-1)
+    # Example output (Debian wheezy):
+    # GNU gdb (GDB) 7.4.1-debian
+    # Example output (centos 2.6.32):
+    # GNU gdb (GDB) Red Hat Enterprise Linux (7.2-56.el6)
+
+    # As we've seen in the examples above, versions may be named very liberally
+    # So we assume every part of that string may be the "real" version string
+    # and try to parse them all. This too isn't perfect (later strings will
+    # overwrite information gathered from previous ones), but it should be
+    # flexible enough for everything out there.
+    major = None
+    minor = None
+    micro = None
+    for potential_versionstring in output.split():
+      version = re.split('[^0-9]', potential_versionstring)
+      try:
+        major = int(version[0])
+      except (IndexError, ValueError):
+        pass
+      try:
+        minor = int(version[1])
+      except (IndexError, ValueError):
+        pass
+      try:
+        micro = int(version[2])
+      except (IndexError, ValueError):
+        pass
+    return (major, minor, micro)
 
   # On JSON handling:
   # The python2 json module ignores the difference between unicode and str
@@ -377,10 +442,11 @@ class Inferior(object):
   # frame_depth is the 'depth' (as measured from the outermost frame) of the
   # requested frame. A value of -1 will hence mean the most recent frame.
 
-  def __init__(self, pid, auto_symfile_loading=True):
+  def __init__(self, pid, auto_symfile_loading=True, architecture='i386:x86-64'):
     super(Inferior, self).__init__()
     self.position = self._Position(pid=pid, tid=None, frame_depth=-1)
     self._symbol_file = None
+    self.arch = architecture
     self.auto_symfile_loading = auto_symfile_loading
 
     # Inferior objects are created before the user ever issues the 'attach'
@@ -415,7 +481,7 @@ class Inferior(object):
         loaded by gdb.
     """
     self.ShutDownGdb()
-    self.__init__(pid, auto_symfile_loading)
+    self.__init__(pid, auto_symfile_loading, architecture=self.arch)
 
   @property
   def gdb(self):
@@ -433,20 +499,20 @@ class Inferior(object):
     """
     if self.attached:
       raise GdbProcessError('Gdb is already running.')
-    self._gdb = GdbProxy()
+    self._gdb = GdbProxy(arch=self.arch)
     self._gdb.Attach(self.position)
 
     if self.auto_symfile_loading:
       try:
         self.LoadSymbolFile()
       except (ProxyError, TimeoutError) as err:
-        self._gdb = GdbProxy()
+        self._gdb = GdbProxy(arch=self.arch)
         self._gdb.Attach(self.position)
         if not self.gdb.IsSymbolFileSane(self.position):
-          logging.warning('Failed to automatically load symbol file, some '
-                          'functionality will be unavailable until symbol file'
-                          ' is provided.')
-          logging.info(err.message)
+          logging.warning('Failed to automatically load a sane symbol file, '
+                          'most functionality will be unavailable until symbol'
+                          'file is provided.')
+          logging.debug(err.message)
 
   def ShutDownGdb(self):
     if self._gdb and self._gdb.is_running:
@@ -459,6 +525,7 @@ class Inferior(object):
     if path:
       self._symbol_file = path
     s_path = self._symbol_file or _SymbolFilePath()
+    logging.debug('Trying to load symbol file: %s' % s_path)
     if self.attached:
       self.gdb.LoadSymbolFile(self.position, s_path)
       if not self.gdb.IsSymbolFileSane(self.position):
@@ -517,6 +584,7 @@ class Inferior(object):
     except OSError as err:
       # We might (for whatever reason) simply not be permitted to do this.
       if err.errno == errno.EPERM:
+        logging.debug('Reveived EPERM when trying to signal inferior.')
         return True
       return False
 

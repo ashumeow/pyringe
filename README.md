@@ -1,16 +1,27 @@
+**DISCLAIMER: This is not an official google project, this is just something I wrote while at Google.**
+
 Pyringe
 =======
 
-What is it?
------------
+What this is
+------------
 
 Pyringe is a python debugger capable of attaching to running processes,  inspecting their state and even of injecting python code into them while they're running. With pyringe, you can list threads, get tracebacks, inspect locals/globals/builtins of running functions, all without having to prepare your program for it.
+
+What this is not
+----------------
+
+A "Google project". It's my internship project that got open-sourced. Sorry for the confusion.
 
 What do I need?
 ---------------
 
-Pyringe internally uses gdb to do a lot of its heavy lifting, so you will need a fairly recent build of gdb (version 7 onwards, and only if gdb was configured with `--with-python`). You will also need the symbols for whatever build of python you're running. On Fedora, the package you're looking for is `python-debuginfo`, on Debian it's called `python2.7-dbg` (adjust according to version).  
-[Colorama](https://pypi.python.org/pypi/colorama) is also supported, but optional.
+Pyringe internally uses gdb to do a lot of its heavy lifting, so you will need a fairly recent build of gdb (version 7.4 onwards, and only if gdb was configured with `--with-python`). You will also need the symbols for whatever build of python you're running.  
+On Fedora, the package you're looking for is `python-debuginfo`, on Debian it's called `python2.7-dbg` (adjust according to version). Arch Linux users: see [issue #5][], Ubuntu users can only debug the `python-dbg` binary (see [issue #19][]).  
+Having [Colorama](https://pypi.python.org/pypi/colorama) will get you output in boldface, but it's optional.
+
+[issue #5]: https://github.com/google/pyringe/issues/5
+[issue #19]: https://github.com/google/pyringe/issues/19
 
 How do I get it?
 ----------------
@@ -19,6 +30,20 @@ Get it from the [Github repo][], [PyPI][], or via pip (`pip install pyringe`).
 
 [Github repo]: https://github.com/google/pyringe
 [PyPI]: https://pypi.python.org/pypi/pyringe
+
+Is this Python3-friendly?
+-------------------------
+
+Short answer: **No, sorry.** Long answer:  
+There's three potentially different versions of python in play here:  
+1. The version running pyringe  
+2. The version being debugged  
+3. The version of `libpythonXX.so` your build of gdb was linked against  
+
+`2` Is currently the dealbreaker here. Cpython has changed a bit in the meantime[1], and making all features work while debugging python3 will have to take a back seat for now until the more glaring issues have been taken care of.    
+As for `1` and `3`, the `2to3` tool may be able to handle it automatically. But then, as long as `2` hasn't been taken care of, this isn't really a use case in the first place.
+
+[1] - For example, `pendingbusy` (which is used for injection) has been renamed to `busy` and been given a function-local scope, making it harder to interact with via gdb.
 
 Will this work with PyPy?
 -------------------------
